@@ -83,7 +83,7 @@ def extract_number(text):
 
 
 def extract_roll_no(text):
-    m = re.search(r"\b([A-Za-z]{2}\d{5,6})\b", text)
+    m = re.search(r"\b([A-Za-z]{2}\d{4,6})\b", text)
     return m.group(1).upper() if m else None
 
 
@@ -109,55 +109,82 @@ def resolve_item_name(text, choices):
     return fuzzy_find(text, choices)
 
 
+DEPT_SYNONYMS = {
+    "cs": "Computer Science", "comp sci": "Computer Science", "computer sci": "Computer Science",
+    "compsci": "Computer Science", "cse": "Computer Science",
+    "mech": "Mechanical", "mechanical engineering": "Mechanical",
+    "electrical": "Electrical", "eee": "Electrical", "ee": "Electrical",
+    "civil engineering": "Civil",
+    "business": "Business Admin", "biz": "Business Admin", "mba": "Business Admin", "management": "Business Admin",
+    "physics": "Physics",
+    "math": "Mathematics", "maths": "Mathematics",
+}
+
+
+def resolve_department(text, choices):
+    text_lower = text.lower()
+    for syn, real in DEPT_SYNONYMS.items():
+        if syn in text_lower and real in choices:
+            return real
+    return fuzzy_find(text, choices)
+
+
 # ------------------------------------------------------------- intent map --
 # Each entry: (regex pattern, intent_name). First match wins, checked in order.
 
 INTENT_PATTERNS = {
     "Course Inventory": [
-        (r"\b(full|available seats|seats left|how many seats)\b", "check_seats"),
+        (r"\b(full|available seats|seats left|seats remaining|how many seats|spots left|openings|vacan(t|cy)|room for)\b", "check_seats"),
         (r"\b(credit)", "course_credits"),
-        (r"\b(list|show|all courses|catalog)\b", "list_courses"),
-        (r"\b(department|which dept)\b", "course_department"),
+        (r"\b(list|show|all courses|catalog|what courses|which courses|courses offered)\b", "list_courses"),
+        (r"\b(department|which dept|what dept|offered by)\b", "course_department"),
         (r"\b(update|enroll|add student)\b", "update_seats"),
+        (r"\b(semester|when is)\b", "list_courses"),
     ],
     "Teachers": [
-        (r"\b(who teach|teaches|teaching)\b", "who_teaches"),
-        (r"\b(email)\b", "teacher_email"),
-        (r"\b(how many|count)\b", "count_teachers"),
-        (r"\b(list|show|all)\b", "list_teachers"),
-        (r"\b(experience|years)\b", "experience_filter"),
+        (r"\b(who teach|teaches|teaching|instructor for|professor for|faculty for)\b", "who_teaches"),
+        (r"\b(email|contact|reach)\b", "teacher_email"),
+        (r"\b(how many|count|number of)\b", "count_teachers"),
+        (r"\b(list|show|all|faculty in|staff in)\b", "list_teachers"),
+        (r"\b(experience|years|senior|veteran)\b", "experience_filter"),
+        (r"\b(designation|professor|lecturer|associate)\b", "list_teachers"),
     ],
     "Applications": [
-        (r"\b(pending)\b", "list_pending"),
-        (r"\b(approved)\b", "list_approved"),
-        (r"\b(rejected)\b", "list_rejected"),
-        (r"\b(under review)\b", "list_under_review"),
-        (r"\b(average|avg)\b", "avg_score"),
-        (r"\b(how many|count|total applications)\b", "count_applications"),
+        (r"\b(pending|awaiting|not yet decided)\b", "list_pending"),
+        (r"\b(approved|accepted|selected)\b", "list_approved"),
+        (r"\b(rejected|denied|declined)\b", "list_rejected"),
+        (r"\b(under review|being reviewed|in review)\b", "list_under_review"),
+        (r"\b(average|avg|mean score)\b", "avg_score"),
+        (r"\b(how many|count|total applications)\b|number of applic", "count_applications"),
         (r"\b(update|approve|reject|mark)\b", "update_status"),
-        (r"\b(list|show)\b", "list_all_applications"),
+        (r"\b(list|show|all applic)\b", "list_all_applications"),
     ],
     "Fees": [
-        (r"\b(unpaid|not paid|pending dues|outstanding)\b", "list_unpaid"),
-        (r"\b(partial)\b", "list_partial"),
-        (r"\b(mark|update).*paid\b", "mark_paid"),
-        (r"\b(total collected|total fee|collected)\b", "total_collected"),
-        (r"\b(how much|owe|due)\b", "fee_owed"),
-        (r"\b(list|show)\b", "list_all_fees"),
+        (r"\b(unpaid|not paid|pending dues|outstanding|haven'?t paid|default(ed|ers)?)\b", "list_unpaid"),
+        (r"\b(partial|partly paid|half paid)\b", "list_partial"),
+        (r"\b(mark|update|set).*paid\b", "mark_paid"),
+        (r"\b(total collected|total fee|collected|revenue|total received)\b", "total_collected"),
+        (r"\b(how much|owe|due|balance|pending amount|outstanding amount)\b", "fee_owed"),
+        (r"\b(list|show|all fees|fee records)\b", "list_all_fees"),
     ],
     "Inventory": [
-        (r"\b(low stock|reorder|need)\b", "low_stock"),
-        (r"\b(received|got|restocked)\b", "update_quantity_add"),
-        (r"\b(used|removed|consumed|took)\b", "update_quantity_subtract"),
-        (r"\b(add a new item|add new|new item)\b", "add_item"),
-        (r"\b(how many|quantity|left|stock)\b", "check_quantity"),
-        (r"\b(list|show|all)\b", "list_inventory"),
+        (r"\b(low stock|reorder|need|running low|below reorder|short(age)?)\b", "low_stock"),
+        (r"\b(received|got|restocked|new stock|arrived|delivered|added)\b", "update_quantity_add"),
+        (r"\b(used|removed|consumed|took|gave out|issued|damaged|broke|lost)\b", "update_quantity_subtract"),
+        (r"\b(add a new item|add new|new item|register.*item)\b", "add_item"),
+        (r"\b(how many|quantity|left|stock|count of|number of)\b", "check_quantity"),
+        (r"\b(list|show|all|inventory of|what.*have)\b", "list_inventory"),
     ],
 }
 
 
 def detect_intent(domain, question):
     q = question.lower()
+
+    # A roll number is a strong, unambiguous signal for a specific student's fee lookup
+    if domain == "Fees" and extract_roll_no(question):
+        return "fee_owed"
+
     for pattern, intent in INTENT_PATTERNS.get(domain, []):
         if re.search(pattern, q):
             return intent
@@ -172,18 +199,30 @@ def handle_course_inventory(question, intent):
 
     if intent == "check_seats":
         course = fuzzy_find(question, courses)
-        if not course:
-            return None, "I couldn't tell which course you meant. Try naming it more specifically."
-        rows = run_select(
-            "SELECT course_name, seats_total, seats_filled, semester FROM courses WHERE course_name = ?",
-            (course,),
-        )
-        if not rows:
-            return None, f"No data found for '{course}'."
-        r = rows[0]
-        remaining = r["seats_total"] - r["seats_filled"]
-        status = "full" if remaining <= 0 else f"{remaining} seat(s) available"
-        return rows, f"**{r['course_name']}** ({r['semester']}): {r['seats_filled']}/{r['seats_total']} seats filled — {status}."
+        if course:
+            rows = run_select(
+                "SELECT course_name, seats_total, seats_filled, semester FROM courses WHERE course_name = ?",
+                (course,),
+            )
+            r = rows[0]
+            remaining = r["seats_total"] - r["seats_filled"]
+            status = "full" if remaining <= 0 else f"{remaining} seat(s) available"
+            return rows, f"**{r['course_name']}** ({r['semester']}): {r['seats_filled']}/{r['seats_total']} seats filled — {status}."
+
+        # No specific course matched — try department-level aggregate instead
+        dept = resolve_department(question, departments)
+        if dept:
+            rows = run_select(
+                "SELECT course_name, seats_total, seats_filled FROM courses WHERE department = ?", (dept,)
+            )
+            if not rows:
+                return None, f"No courses found in {dept}."
+            total = sum(r["seats_total"] for r in rows)
+            filled = sum(r["seats_filled"] for r in rows)
+            remaining = total - filled
+            return rows, f"Across all {len(rows)} courses in **{dept}**: {filled}/{total} seats filled — {remaining} seat(s) available in total."
+
+        return None, "I couldn't tell which course or department you meant. Try naming it more specifically, e.g. 'seats left in Data Structures' or 'seats left in Computer Science'."
 
     if intent == "course_credits":
         course = fuzzy_find(question, courses)
@@ -204,7 +243,7 @@ def handle_course_inventory(question, intent):
         return rows, f"**{rows[0]['course_name']}** is offered by the {rows[0]['department']} department."
 
     if intent == "list_courses":
-        dept = fuzzy_find(question, departments)
+        dept = resolve_department(question, departments)
         if dept:
             rows = run_select("SELECT course_name, department, semester FROM courses WHERE department = ?", (dept,))
             label = f" in {dept}"
@@ -248,7 +287,7 @@ def handle_teachers(question, intent):
         return rows, f"{rows[0]['full_name']}'s email is {rows[0]['email']}."
 
     if intent == "count_teachers":
-        dept = fuzzy_find(question, departments)
+        dept = resolve_department(question, departments)
         if dept:
             rows = run_select("SELECT COUNT(*) as cnt FROM teachers WHERE department = ?", (dept,))
             return rows, f"There are {rows[0]['cnt']} teachers in {dept}."
@@ -256,7 +295,7 @@ def handle_teachers(question, intent):
         return rows, f"There are {rows[0]['cnt']} teachers total."
 
     if intent == "list_teachers":
-        dept = fuzzy_find(question, departments)
+        dept = resolve_department(question, departments)
         desig = fuzzy_find(question, designations)
         if dept:
             rows = run_select("SELECT full_name, designation FROM teachers WHERE department = ?", (dept,))
@@ -295,7 +334,7 @@ def handle_applications(question, intent):
 
     if intent in status_map:
         status = status_map[intent]
-        dept = fuzzy_find(question, departments)
+        dept = resolve_department(question, departments)
         if dept:
             rows = run_select(
                 "SELECT applicant_name, department_applied, score FROM applications WHERE status = ? AND department_applied = ?",
@@ -310,7 +349,7 @@ def handle_applications(question, intent):
         return rows, f"{len(rows)} application(s) are {status}{label}."
 
     if intent == "avg_score":
-        dept = fuzzy_find(question, departments)
+        dept = resolve_department(question, departments)
         if dept:
             rows = run_select(
                 "SELECT AVG(score) as avg_score FROM applications WHERE department_applied = ?", (dept,)
@@ -323,7 +362,7 @@ def handle_applications(question, intent):
         return rows, f"The average application score{label} is {avg:.1f}." if avg else f"No score data available{label}."
 
     if intent == "count_applications":
-        dept = fuzzy_find(question, departments)
+        dept = resolve_department(question, departments)
         if dept:
             rows = run_select(
                 "SELECT COUNT(*) as cnt FROM applications WHERE department_applied = ?", (dept,)
@@ -392,7 +431,7 @@ def handle_fees(question, intent):
                 return None, f"No fee record found for {student}."
             lines = [f"{r['semester']}: ₹{r['amount_due']-r['amount_paid']:,.2f} due ({r['paid_status']})" for r in rows]
             return rows, f"{student}'s dues — " + "; ".join(lines)
-        return None, "I couldn't tell which student you meant. Try including their roll number (e.g. CS1001) or full name."
+        return None, "I couldn't tell which student you meant. Try including their roll number (e.g. BU11037) or full name."
 
     if intent == "mark_paid":
         return None, "Marking fees as paid requires a specific student roll number and semester — this write action isn't wired into the free rule-based mode yet."
